@@ -173,12 +173,21 @@ test('Bug #2: formatCurrency must produce Indian ₹ format with lakh grouping',
     'utf8'
   );
 
-  // Extract the formatCurrency function
-  const fnMatch = appJs.match(/function formatCurrency\(n\)\s*\{[^}]+\}/);
-  expect(fnMatch).not.toBeNull();
+  // Extract the formatCurrency function — handle multi-line bodies by
+  // matching balanced braces instead of a single [^}]+ group.
+  const startIdx = appJs.indexOf('function formatCurrency(n)');
+  expect(startIdx).toBeGreaterThan(-1);
+  // Find the matching closing brace
+  let braceDepth = 0;
+  let endIdx = startIdx;
+  for (let i = startIdx; i < appJs.length; i++) {
+    if (appJs[i] === '{') braceDepth++;
+    if (appJs[i] === '}') { braceDepth--; if (braceDepth === 0) { endIdx = i + 1; break; } }
+  }
+  const fnSource = appJs.slice(startIdx, endIdx);
 
   // Evaluate it in isolation
-  const formatCurrency = new Function(`${fnMatch[0]}; return formatCurrency;`)();
+  const formatCurrency = new Function(`${fnSource}; return formatCurrency;`)();
 
   const result = formatCurrency(182900);
 

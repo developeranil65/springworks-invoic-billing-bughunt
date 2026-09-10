@@ -1,14 +1,17 @@
-// BUG: status badge colors are wrong - PAID should read clearly different
-// from an outstanding invoice, but both map to the same "blue" class.
+// FIX #1: PAID uses a distinct 'green' badge color, not 'blue'.
 const STATUS_COLORS = {
   INVOICE_ISSUED: 'blue',
-  PAID: 'blue'
+  PAID: 'green'
 };
 
 function formatCurrency(n) {
-  // BUG: no ₹ symbol and no Indian (lakh) digit grouping - this is a
-  // plain western-style number, e.g. "182900.00" instead of "₹1,82,900.00".
-  return Number(n).toFixed(2);
+  // FIX #2: use Indian locale with ₹ symbol and lakh-style digit grouping.
+  return Number(n).toLocaleString('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
 function showToast(message) {
@@ -77,10 +80,13 @@ document.getElementById('new-invoice-form').addEventListener('submit', async (ev
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ candidateName, isSez, items: [{ desc, qty, rate }] })
   });
-  // BUG: success toast fires regardless of whether the request actually
-  // succeeded (e.g. a blank candidateName gets a 400, but the user still
-  // sees "Invoice created").
-  showToast('Invoice created');
+  // FIX #3: only show success toast when the response is actually successful.
+  if (res.ok) {
+    showToast('Invoice created');
+  } else {
+    const err = await res.json();
+    showToast(err.error || 'Failed to create invoice');
+  }
   document.getElementById('new-invoice-form').reset();
   await loadInvoices();
 });

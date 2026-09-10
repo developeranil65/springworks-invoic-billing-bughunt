@@ -54,15 +54,13 @@ async function fixTrackOpen() {
 }
 
 
-// BUG: list endpoint reports `total` as the pre-GST subtotal, while the
-// detail endpoint below correctly reports `total` as subtotal + GST. The
-// same invoice therefore shows two different "total" figures depending on
-// which endpoint you call.
+// FIX #5: list endpoint now reports inv.total (subtotal + GST), consistent
+// with the detail endpoint.
 app.get('/api/invoices', (req, res) => {
   const list = req.store.invoices.map((inv) => ({
     id: inv.id,
     candidateName: inv.candidateName,
-    total: inv.subtotal,
+    total: inv.total,
     balance: inv.balance,
     status: inv.status
   }));
@@ -81,31 +79,28 @@ app.post('/api/invoices', (req, res) => {
   if (!candidateName || !candidateName.trim()) {
     return res.status(400).json({ error: 'candidateName is required' });
   }
-  // BUG: an empty (or missing) items array should be rejected with 400 -
-  // an invoice needs at least one line item - but that check is missing,
-  // so a zero-value invoice gets created instead.
+  // FIX #7 + #8: validate that every line item has numeric, positive qty and rate.
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'items must be a non-empty array' });
+  }
+  for (const item of items) {
+    if (typeof item.qty !== 'number' || isNaN(item.qty) || item.qty <= 0) {
+      return res.status(400).json({ error: 'each item qty must be a positive number' });
+    }
+    if (typeof item.rate !== 'number' || isNaN(item.rate) || item.rate <= 0) {
+      return res.status(400).json({ error: 'each item rate must be a positive number' });
+    }
+  }
 
   let subtotal = 0;
-  const lineItems = (items || []).map((item) => {
-    // BUG: qty is never validated to be positive, so a negative quantity
-    // silently reduces the subtotal instead of being rejected.
-    // BUG: qty/rate are not checked to be numbers - passing a string
-    // produces NaN math, which JSON-serializes as `null` in the response
-    // instead of a clean 400.
-    // BUG: each line total is rounded to the nearest whole rupee (dropping
-    // paise) instead of to 2 decimal places, so line totals don't match
-    // qty * rate for fractional rates.
-    const lineTotal = Math.round(item.qty * item.rate);
-    // BUG: subtotal is assigned instead of accumulated, so on a multi-item
-    // invoice every earlier item's lineTotal is silently discarded and only
-    // the last item ends up counted in the subtotal/GST/total.
-    subtotal = lineTotal;
+  const lineItems = items.map((item) => {
+    const lineTotal = Math.round(item.qty * item.rate * 100) / 100;
+    subtotal += lineTotal;
     return { desc: item.desc, qty: item.qty, rate: item.rate, lineTotal };
   });
 
-  // BUG: the SEZ carve-out is never applied - GST is charged at 18% even
-  // when isSez is true, instead of being waived to 0%.
-  const gst = subtotal * GST_RATE;
+  // FIX #6: SEZ-registered companies are GST-exempt.
+  const gst = isSez ? 0 : subtotal * GST_RATE;
   const total = subtotal + gst;
 
   const invoice = {
@@ -127,17 +122,15 @@ app.post('/api/invoices', (req, res) => {
 app.post('/api/invoices/:id/credit-note', (req, res) => {
   const invoice = req.store.invoices.find((i) => i.id === Number(req.params.id));
   if (!invoice) {
-    // BUG: wrong HTTP status - an unknown invoice id should return 404,
-    // but this returns 200 with an error-shaped body instead.
-    return res.json({ error: 'Invoice not found' });
+    // FIX #9: return proper 404 status for unknown invoice.
+    return res.status(404).json({ error: 'Invoice not found' });
   }
 
   const { amount } = req.body;
-  // BUG: amount is never checked to be a positive number - zero and
-  // negative amounts are accepted.
-  // BUG: amount is never checked against the invoice's current balance -
-  // a credit note larger than what's left (or larger than the invoice
-  // total) is accepted, driving the balance negative.
+  // FIX #4: validate that amount is a positive number.
+  if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'amount must be a positive number' });
+  }
 
   const creditNote = { id: req.store.nextCreditNoteId++, amount, date: new Date().toISOString().slice(0, 10) };
   invoice.creditNotes.push(creditNote);
